@@ -1,0 +1,490 @@
+---
+title: "Map Dr. P to Flagelling DB"
+output: html_notebook
+---
+
+Jacobo de la Cuesta-Zuluaga. June 2021.
+
+The aim of this notebook is to prepare scripts run LLMGPG on the combined large Dr. P sample
+
+# Init
+```{r}
+library(tidyverse)
+library(glue)
+library(conflicted)
+library(ggpubr)
+library(seqinr)
+
+# LeylabRmisc
+list.files("/ebio/abt3_scratch/jdelacuesta/tlr5/bin/LeyLabRMisc/R", full.names = TRUE) %>%# force()
+  walk(function(x) source(x))
+```
+
+```{r}
+conflict_prefer("filter", "dplyr")
+conflict_prefer("count", "dplyr")
+```
+
+# Var
+```{r}
+# Directory paths
+base_dir = "/ebio/abt3_projects/small_projects/jdelacuesta/TLR5"
+
+# Pipeline repo
+llmgpg_dir = "/ebio/abt3_projects/columbian_gut_metagenome/bin/tlr5/llmgpg"
+
+# Samples files
+samples_files_dir = file.path(base_dir, "DrP/Final_DrP")
+samples_file = "/ebio/abt3_projects/small_projects/jdelacuesta/TLR5/DrP/Merge_DrP.txt"
+
+# Fla database
+Fla_db_raw = file.path(base_dir, "data/curatedFlagellin_pfam_panther_noflgl.fasta")
+Fla_db_clean = file.path(base_dir, "data/Flagellin_No_Associated_Prots.fasta")
+
+# Output of the pipeline
+output_dir = file.path(base_dir, "diamond")
+
+# Temporary directory
+tmp_dir = "/ebio/abt3_scratch"
+```
+
+# Filter flagellin database
+```{r}
+# Taxonomy and IDs of flagellins from alignment
+
+# Read alignment
+Fla_raw_fasta = Fla_db_raw %>% 
+  read_lines()
+
+# Extract fasta header
+Fla_headers = Fla_raw_fasta[str_detect(Fla_raw_fasta,">")]
+
+# Remove entries containing associated, hook, partial or hypothetical in name
+True_Fla_headers = Fla_headers[!str_detect(Fla_headers,"associated|hook|partial|hypothetical")]
+True_Fla_headers[1:10]
+
+retained_proportion = length(True_Fla_headers)/length(Fla_headers)
+retained_proportion*100
+
+# Extract NCBI ID
+True_Fla_IDs = True_Fla_headers %>% 
+  str_extract(., ">.*\\.[0-9]") %>% 
+  str_remove(., ">")
+
+True_Fla_IDs[1:10]
+```
+
+```{r}
+# Read flagellin db as fasta
+Fla_fasta_full = read.fasta(file = Fla_db_raw, 
+                            seqtype = "AA", 
+                            as.string = TRUE, 
+                            set.attributes = FALSE)
+
+# Retain true fasta headers
+Fla_fasta_clean = Fla_fasta_full[c(which(names(Fla_fasta_full) %in% True_Fla_IDs))]
+
+# Write new fasta file
+write.fasta(sequences = Fla_fasta_clean, 
+            names = names(Fla_fasta_clean), 
+            file.out = Fla_db_clean)
+```
+
+# Prepare pipeline
+```{r}
+config_default = file.path(llmgpg_dir, "config.yaml")
+read_lines(config_default) %>% 
+  writeLines()
+```
+
+## Create config template
+```{r}
+config_text = glue('
+#-- I/O --#
+# table with sample --> read_file information
+samples_file: {{samples_file}}
+
+# subject amino acid sequences (mapping reads to these to estimate abundances)
+subject_fasta_file: {{subject_fasta_file}}
+
+# output location
+output_dir: {{output_dir}}
+
+# temporary file directory (your username will be added automatically)
+tmp_dir: /ebio/abt3_scratch/
+
+# read file path
+# use "None" if full file path is included in the samples_file
+read_file_path: None
+
+#-- DB --#
+# matam reference database (use database prefix)
+matam_db: /ebio/abt3_projects/databases_no-backup/matam/SILVA_128_SSURef_NR95
+
+#-- subsample --#
+# subsampling input reads; use "Skip" if you do not want to subsample
+subsample_depth: Skip     # use a number of sample reads to that depth
+subsample_seed: 2941
+
+#-- software parameters --#
+params:
+  matam: Skip # -v --max_memory 100000      # if 16S, use --perform_taxonomic_assignment
+  cdhit: Skip #-c 1 -n 10 -d 0 -s 0 -M 12000  
+  diamond: --evalue 1e-3 --ultra-sensitive      # mapping to subject_fasta_file
+
+#-- pipeline parameters --#
+pipeline:
+  snakemake_folder: ./
+  script_folder: ./bin/scripts/
+  use_tmpfs: True
+  name: LLMGPG
+')
+
+```
+
+
+## Change parameters
+```{r}
+# Change parameters
+config_modified = glue(config_text, 
+     samples_file = samples_file, 
+     output_dir = output_dir,
+     subject_fasta_file = Fla_db_clean)
+
+# Print config file
+writeLines(config_modified)
+```
+
+```{r}
+# Save file
+mod_config_file = file.path(llmgpg_dir, "config_DrP.yaml")
+write_lines(x = config_modified, file = mod_config_file)
+```
+
+## Snakemake command 
+```{r}
+qsub_template = glue("cd {{llmgpg}} ; conda activate snakemake; screen -L -S {{job_name}} ./snakemake_sge.sh {{config_file}} {{n_jobs}} --keep-going --rerun-incomplete --dryrun --quiet")
+
+glue(qsub_template, llmgpg = llmgpg_dir, job_name = "DrP_llmgpg", config_file = mod_config_file, n_jobs = "30")
+```
+
+# Extract the flagellins
+## Load tables
+After running the `LLMGPG` I can assess the abundance of flagellins
+
+```{r}
+# Read tables
+#diamond_dir = file.path(base_dir, "diamond_old/diamond")
+diamond_dir = file.path(base_dir, "diamond/diamond")
+
+diamond_dir %>% 
+  list.files(full.names = TRUE)
+
+# Relative abundance
+Fla_relabund = file.path(diamond_dir, "rel-abund.tsv") %>% 
+  read_tsv()
+
+# Reads per kilobase
+Fla_rpk = file.path(diamond_dir, "rpk.tsv") %>% 
+  read_tsv()
+
+# Reads per kilobase million
+Fla_rpkm = file.path(diamond_dir, "rpkm.tsv") %>% 
+  read_tsv()
+```
+```{r}
+# Taxonomy and IDs of flagellins from alignment
+
+# Read alignment
+Fla_align = "/ebio/abt3_projects/small_projects/jdelacuesta/TLR5/data/curatedFlagellin_pfam_panther_noflgl.fasta" %>% 
+  read_lines()
+
+# Extract fasta header
+Fla_headers = Fla_align[str_detect(Fla_align,">")]
+
+# Separate header into ID and taxonomy
+Fla_taxonomy = data.frame(raw_text = Fla_headers) %>% 
+  mutate(ID = str_extract(raw_text, ">.*\\.[0-9]"), 
+         ID = str_remove(ID, ">"), 
+         Taxonomy = str_extract(raw_text, "\\[.*"), 
+         Taxonomy = str_remove_all(Taxonomy, "\\["), ,
+         Taxonomy =str_remove_all(Taxonomy, "\\]")) %>% 
+  select(ID, Taxonomy) %>% 
+  filter(ID %in% True_Fla_IDs)
+```
+
+
+```{r}
+# Total number of reads
+DrP_multiQC = "/ebio/abt3_scratch/jdelacuesta/DrP_Combined/reports/multiqc-final/multiqc_data/multiqc_general_stats.txt" %>% 
+  read_tsv()
+
+DrP_multiQC = DrP_multiQC %>% 
+  filter(str_detect(Sample, "R1")) %>% 
+  rename("Sequences" = "FastQC_mqc-generalstats-total_sequences") %>% 
+  select(Sample, Sequences)
+
+DrP_multiQC$Sequences %>% sum
+```
+
+## Descriptive stats
+```{r}
+# I will use the RPK data to account for target sequence length
+# Since this is within a single sample, there's no need to adjust for sequencing depth
+
+Fla_rpk %>% 
+  dfhead()
+```
+
+```{r}
+# Number of unmapped reads
+# Adjusted to an hypothetical 1 Kb gene
+Fla_rpk %>% 
+  filter(Subject == "UNMAPPED")
+
+# Remove unmapped reads
+Fla_rpk_mapped = Fla_rpk %>% 
+  rename("Flagellin" = "Subject") %>% 
+  filter(Flagellin != "UNMAPPED", 
+         Flagellin %in% True_Fla_IDs) %>% 
+  arrange(-RPK) %>% 
+  mutate(Flagellin = fct_inorder(Flagellin))
+
+# Summary stats of mapped reads
+Fla_rpk_mapped %>% 
+  summarise(Summary = summary(RPK)) %>% 
+  mutate(Stat = c("Min", "Q_1st", "Median", "Mean", "Q_3st", "Max"), 
+         Summary = as.numeric(round(Summary, 2))) %>% 
+  select(Stat, Summary) 
+
+Fla_rpk_mapped$RPK %>% 
+  quantile(x = ., probs = c(0.5, 0.9, 0.95, 0.99))
+
+```
+
+```{r fig.height=5, fig.width=10}
+# Histogram
+Fla_rpk_hist = Fla_rpk_mapped %>% 
+  ggplot(aes(x = RPK)) +
+    geom_histogram(bins=32, color = "grey", fill = "steelblue") +
+    theme_minimal() +
+    #scale_y_log10() +
+    scale_x_log10() +
+    labs(x = "Reads per kilobase", y = "Flagellin count") +
+    geom_vline(xintercept = 16.6) + # Mean +
+    #geom_vline(xintercept = 353.71, linetype = "dotdash") + # Mean +
+    geom_vline(xintercept = 496.6, linetype = "dotted") + # 90 percentile
+    geom_vline(xintercept = 1421.7, linetype = "dashed") + # 95 percentile
+    geom_vline(xintercept = 8122.4, linetype = "dotdash") # 99 percentile
+
+# Histogram top mappers
+Fla_rpk_zoom_hist = Fla_rpk_hist +
+  coord_cartesian(xlim = c(550, 24000), ylim = c(0, 250))
+
+
+ggarrange(Fla_rpk_hist, Fla_rpk_zoom_hist, 
+          labels = c("A", "B"), 
+          ncol = 2, 
+          align = "hv")
+```
+
+## Most abundant Fla
+```{r}
+Fla_top_raw = Fla_rpk_mapped %>% 
+  filter(RPK > quantile(RPK, 0.9)) %>% 
+  left_join(Fla_taxonomy, by = c("Flagellin" = "ID"))
+
+# Obtain Tax IDs of taxa from protein accessions
+tax_ID = function(x){
+  ncbi_search = rentrez::entrez_search(db="protein", term = x)
+  taxonomy_search = rentrez::entrez_summary(db = "protein", id = ncbi_search$ids)
+  taxonomy_search$taxid
+}
+
+# Safely fail
+tax_ID_safe = safely(tax_ID, otherwise = NA)
+
+
+Fla_TaxIDs = Fla_top_raw$Flagellin %>% 
+  map_chr(function(x) tax_ID_safe(x)$result)
+
+Fla_top_TaxID = Fla_top_raw %>% 
+  mutate(TaxID = as.numeric(Fla_TaxIDs))
+```
+
+```{r}
+Fla_top_TaxID %>% head
+```
+
+
+```{r}
+# Add GTDB metadata
+GTDB_metadata_raw = read_tsv("/ebio/abt3_projects/databases_no-backup/GTDB/release202/metadata/bac120_metadata_r202.tsv")
+```
+
+
+```{r}
+# Extract taxonomy
+GTDB_metadata = GTDB_metadata_raw %>% 
+  select(TaxID = ncbi_taxid, SP_TaxID = ncbi_species_taxid, gtdb_taxonomy, Taxonomy = ncbi_organism_name, accession)  # ncbi_taxid ncbi_species_taxid
+
+# Add gtdb taxonomy and separate into columns
+Tax_levels = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+# Fix issue with s__Eubacterium_F xylanophilum
+GTDB_metadata_filt = GTDB_metadata %>% 
+  mutate(TaxID = ifelse(SP_TaxID == 39497, 39497, TaxID)) 
+
+Fla_top = left_join(Fla_top_TaxID, GTDB_metadata_filt, by = "TaxID") %>% 
+  separate(gtdb_taxonomy, into = Tax_levels, sep = ";")
+
+```
+
+```{r}
+# There are issues with taxonomy
+# Will add GTDB taxonomy by parts
+
+# Entries without any taxonomy
+Fla_top_missing = Fla_top %>% 
+  filter(is.na(Domain))
+
+# Entries with clear taxonomy
+Fla_top_unambiguous = Fla_top %>% 
+  add_count(Flagellin) %>% 
+  filter(n == 1) %>% 
+  drop_na() %>% 
+  select(-n)
+
+# Entries with ambiguous taxonomy
+# Will define by majority vote
+# Create ambiguous taxonomy table
+Fla_top_ambiguous_tax = Fla_top %>% 
+  add_count(Flagellin) %>% 
+  filter(n > 1) %>% 
+  select(Flagellin, TaxID, one_of(Tax_levels)) %>% 
+  group_by(TaxID) %>% 
+  count(Domain, Phylum, Class, Order, Family, Genus) %>% 
+  arrange(TaxID, -n) %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  select(-n)
+
+# Create flagellin table with majority taxonomy
+Fla_top_ambiguous = Fla_top %>% 
+  add_count(Flagellin) %>% 
+  filter(n > 1) %>%
+  select(TaxID, Flagellin, RPK, Taxonomy.x) %>% 
+  distinct() %>% 
+  left_join(Fla_top_ambiguous_tax, ., by = "TaxID") %>% 
+  distinct()
+
+# Final taxonomy table
+Fla_top_tax = bind_rows(Fla_top_missing, Fla_top_unambiguous) %>% 
+  bind_rows(Fla_top_ambiguous) %>% 
+  select(-Sample, -Taxonomy.y) %>% 
+  rename("Taxonomy" = "Taxonomy.x")
+
+Fla_top_tax = Fla_top_tax %>% 
+  mutate(Fla_lab = case_when((is.na(Genus) & is.na(Species)) ~ paste0(Taxonomy, "*"), 
+                             (!is.na(Genus) & is.na(Species)) ~ Genus,
+                             TRUE ~ Species),
+         Fla_lab = paste(Flagellin, Fla_lab, sep = " - ")) %>% 
+  select(Flagellin, RPK, Fla_lab, everything())
+```
+
+```{r}
+Fla_top_tax %>% 
+  arrange(-RPK)
+```
+
+
+```{r fig.height=10, fig.width=10}
+Fla_top_plot_100 = Fla_top_tax %>% 
+  mutate(Fla_lab = fct_reorder(Fla_lab, -RPK), 
+         Family = ifelse(is.na(Family), "Indeterminate", Family)) %>% 
+  arrange(-RPK) %>% 
+  slice(1:100) %>% 
+  ggplot(aes(x = Fla_lab, y = RPK)) +
+    geom_segment(aes(x=Fla_lab, xend=Fla_lab, y=0, yend=RPK), color = "grey") +
+    geom_point(aes(color = Family), size = 2) + #color = Genus, 
+    coord_cartesian(ylim = c(7500, 25000)) +
+    theme_minimal() +
+    labs(x = "Flagellin", y = "RPK") +
+    #scale_color_manual(values = plot_fla_colors) +
+    scale_color_manual(values = c('#ECC15A', '#77B28E', '#8D2D23', "#000000")) +
+    theme(axis.text.x = element_blank(), 
+          legend.position="bottom") 
+
+Fla_top_plot_10 = Fla_top_tax %>%
+  arrange(-RPK) %>% 
+  slice(1:10) %>% 
+  mutate(Fla_lab = fct_reorder(Fla_lab, -RPK), 
+         Family = ifelse(is.na(Family), "Indeterminate", Family)) %>% 
+  ggplot(aes(x = Fla_lab, y = RPK)) +
+    geom_segment(aes(x=Fla_lab, xend=Fla_lab, y=0, yend=RPK), color = "grey") +
+    geom_point(aes(color = Family), size = 2) + #color = Genus, 
+    coord_cartesian(ylim = c(15000, 25000)) +
+    theme_minimal() +
+    labs(x = "Flagellin", y = "RPK") +
+    scale_color_manual(values = c('#ECC15A', '#77B28E')) +
+    labs(x = "Flagellin", y = "RPK") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8), 
+          legend.position="bottom")
+
+ggarrange(Fla_top_plot_100, Fla_top_plot_10, 
+          labels = c("A", "B"), 
+          ncol = 1, 
+          align = "hv", 
+          common.legend = TRUE)
+```
+
+## Write table
+
+```{r}
+fla_table_write = Fla_top_tax %>%
+  arrange(-RPK) %>% 
+  select(Flagellin, RPK, Fla_lab, Taxonomy, Family, Genus, Species, everything())
+
+write_tsv(fla_table_write, "/ebio/abt3_projects/small_projects/jdelacuesta/TLR5/tables/Fla_DrP_RPK.tsv")
+
+```
+
+## Extract top 1% flagellins from alignment
+```{r}
+# Pull IDs of top fla
+Fla_top_ID = Fla_top_tax %>%
+  arrange(-RPK) %>% 
+  pull(Flagellin)
+
+# Add taxonomy to fasta header
+Fla_fasta_top = Fla_fasta_full[c(which(names(Fla_fasta_full) %in% Fla_top_ID))]
+
+
+Fla_ID_lab = Fla_top_tax[match(names(Fla_fasta_top), Fla_top_tax$Flagellin),] %>% 
+  pull(Fla_lab)
+
+names(Fla_fasta_top) = Fla_ID_lab
+
+# Write fasta file
+Fla_db_top = Fla_db_clean = file.path(base_dir, "data/Flagellin_Top_Abund.fasta")
+
+# Write new fasta file
+write.fasta(sequences = Fla_fasta_top,
+            names = names(Fla_fasta_top),
+            file.out = Fla_db_top)
+```
+
+## Roseburia Fla
+```{r}
+# Detect Roseburia (GTDB definition) flagellins in the top
+Roseburia_IDs = Fla_top_tax %>% 
+  #filter(str_detect(Genus, "Roseburia")) %>% 
+  filter(str_detect(Taxonomy, "Roseburia") | str_detect(Genus, "Roseburia")) %>% 
+  pull(Flagellin)
+# Extract headers from raw fasta
+Roseburia_Flagellins = True_Fla_headers[str_detect(True_Fla_headers, paste(Roseburia_IDs, collapse = "|"))]
+
+# Print
+writeLines(Roseburia_Flagellins)
+```
+

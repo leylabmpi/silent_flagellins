@@ -1,0 +1,73 @@
+---
+title: "Flagellin in the UHGG"
+output: html_notebook
+---
+
+Jacobo de la Cuesta-Zuluaga. March 2022.
+
+The aim of this notebook is to assess the annotated flagellins from the UHGG v.2.0 predicted proteome.
+
+Protein catalogue obtained from https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+# Run a pipe to filter the protein catalogue
+# Retain entries with annotation COG1344 somewhere in text
+all_Flagellin_raw = vroom::vroom(pipe("egrep 'COG1344' /ebio/abt3_projects/temp_data/jdelacuesta/uhgp-90/uhgp-90_eggNOG.tsv"), 
+                             col_names = LETTERS)
+
+# Select columns and name
+all_Flagellin = all_Flagellin_raw %>% 
+  select(Accession = A, COG = E, KO = L, KEGG = M, Taxonomy = `F`, Description = H, Name = I)
+```
+
+```{r}
+# Check for flagellin-associated proteins
+all_Flagellin %>% 
+  select(Description) %>% 
+  distinct()
+
+# True Flagellins
+strict_Flagellin = all_Flagellin %>% 
+  filter(str_detect(Description, "^Flagellin"))
+```
+
+```{r}
+# Total number of proteins in protein catalogue
+Catalogue_size = system("wc -l /ebio/abt3_projects/temp_data/jdelacuesta/uhgp-90/uhgp-90_eggNOG.tsv", intern = TRUE) %>% 
+  str_split(pattern = " ") %>% 
+  unlist() %>% 
+  pluck(1) %>% 
+  as.numeric()
+```
+
+# Description of flagellins
+```{r}
+# Number of flagellins
+n_Fla = strict_Flagellin %>% 
+  nrow()
+
+# Percentage
+per_Fla =(n_Fla/Catalogue_size)*100
+round(per_Fla, 3)
+
+n_Fla
+per_Fla
+Catalogue_size
+
+```
+
+```{r}
+# Taxonomic groups represented in the clusters
+strict_Flagellin %>% 
+  count(Taxonomy, sort = TRUE) 
+
+strict_Flagellin %>% 
+  separate(COG, into = LETTERS, sep = "\\|") %>% 
+  separate(D, into = letters, sep = ",") %>% 
+  count(a)
+```
+
