@@ -1,0 +1,245 @@
+---
+title: "QC of Dr. P"
+output: html_notebook
+---
+
+Jacobo de la Cuesta-Zuluaga. June 2021.
+
+The aim of this notebook is to prepare scripts run LLMGQC on all sequenced Dr. P samples
+
+# Init
+```{r}
+library(tidyverse)
+library(glue)
+library(conflicted)
+
+# LeylabRmisc
+list.files("/ebio/abt3_scratch/jdelacuesta/tlr5/bin/LeyLabRMisc/R", full.names = TRUE) %>%# force()
+  walk(function(x) source(x))
+```
+
+# Var
+```{r}
+# Directory paths
+base_dir = "/ebio/abt3_projects/small_projects/jdelacuesta/TLR5"
+
+# Pipeline repo
+llmgqc_dir = "/ebio/abt3_projects/columbian_gut_metagenome/bin/tlr5/llmgqc"
+
+# Samples files
+samples_files_dir = file.path(base_dir, "DrP")
+
+# Samples file combined
+#samples_file = file.path(TUK_fla_dir, "LLMGQC/final/samples_spring.txt")
+
+# Output of the pipeline
+output_dir = "/ebio/abt3_scratch/jdelacuesta/DrP_Combined"
+
+# Temporary directory
+tmp_dir = "/ebio/abt3_scratch"
+
+# Final DrP dir
+final_DrP = file.path(base_dir, "DrP/Final_DrP")
+```
+
+# Prepare samples file
+```{r}
+
+samples_files_dir %>% 
+  list.files(full.names = TRUE) %>% dput
+
+combined_SRA_files = c("/ebio/abt3_projects/small_projects/jdelacuesta/TLR5/DrP/Gewirtz_DrP_Samples.txt", 
+                       "/ebio/abt3_projects/small_projects/jdelacuesta/TLR5/DrP/JdlC_DrP_Samples.txt") %>% 
+  map_df(function(x) read_tsv(x))
+```
+
+```{r}
+# Use the same name for all files
+# This way the pipeline will combine them all into a single processed file
+
+DrP_Samples = combined_SRA_files %>% 
+  mutate(Sample = 1:nrow(combined_SRA_files), 
+         Sample = paste0("DrP_", Sample))
+
+DrP_Samples
+```
+
+```{r}
+# Write samples file
+DrP_Samplefile = file.path(samples_files_dir, "Combined_DrP.txt")
+write_tsv(DrP_Samples, DrP_Samplefile)
+```
+
+
+# Prepare pipeline
+```{r}
+config_default = file.path(llmgqc_dir, "config.yaml")
+read_lines(config_default) %>% 
+  writeLines()
+```
+
+## Create config template
+```{r}
+config_text = glue('
+#-- I/O --#
+# table with sample --> read_file information
+samples_file: {{samples_file}}
+
+# output location
+output_dir: {{output_dir}}
+
+# temporary file directory (your username will be added automatically)
+tmp_dir: /ebio/abt3_scratch/
+
+# read file path
+# use "None" if full file path is included in the samples_file
+read_file_path: None
+
+# ionice for reducing I/O load (use "-c 2" for noraml I/O usage) 
+ionice: -c 3 
+
+#-- Software parameters --#
+# Use "Skip" to skip any of these steps. If no params for rule, use ""
+# `clumpify`: change dupedist if not HiSeq3000/4000 (dupedist=40 for NextSeq, HiSeq2500, and MiSeq)
+# `clumpify` (more info): this will likely fail for remote (SRA) samples
+# `use_prefetch`: If True, uses aspera connect prefetch (potentially faster download)
+# `remote`: If True, just download read1 (if remote file)
+# `skewer`: Make sure to change `-l` and `-q` as needed
+params:
+  # read download
+  use_prefetch: False
+  remote:
+    just_single: False
+    tmp_dir: /ebio/abt3_scratch/
+  # validation, conversion, subsampling
+  validate_reads: ""
+  convert_fastq_to_1.8: ""
+  seqtk_sample: Skip    # Use number to subsample reads (eg., 1000000)
+  fastqc_on_raw: ""
+  # de-duplication
+  clumpify: dedupe=t dupedist=2500 optical=t
+  fastqc_on_dedup: ""
+  # adapter removal & quality trimming/filtering
+  bbduk: ref=./adapters/bbmap_adapters.fa fastawrap=300 k=23
+  skewer: -x ./adapters/PE_all.fa -n -l 100 -q 25
+  fastqc_on_qual: ""
+  # removal of contaminant reads
+  bbmap: minratio=0.9 maxindel=1 bwr=0.16 bw=12 fast minhits=2 qtrim=r trimq=10 untrim idtag printunmappedcount kfilter=25 maxsites=1 k=14 pairlen=1000 rescuedist=1000
+  ikraken2: Skip #--confidence 0.7
+  fastqc_on_filter: ""
+  # post-QC reads
+  fastqc_on_final: ""
+  # taxonomy
+  centrifuge: Skip
+  krona: Skip
+  # coverage
+  nonpareil: Skip # -T kmer
+  nonpareil_summary: Skip # 1e9      # target seq. depth
+  # master "Skip": reads combined then called "final" reads (skips all QC steps)
+  skip_all_QC: {{skip_all_QC}}
+
+#-- Databases --#
+## hg19 = human genome database for filtering out human reads
+filter_db: /ebio/abt3_projects/databases_no-backup/hg19/hg19
+# centrifuge db
+centrifuge_db: /ebio/abt3_projects/databases_no-backup/centrifuge/p+h+v
+# krona taxonomy db
+krona_tax_db: /ebio/abt3_projects/databases_no-backup/krona/taxonomy
+# kraken2 (see ikraken2 parameters)
+# ikraken2 (iterative kraken2-based read filtering)
+ikraken2_db:  
+  animal_genomes: /ebio/abt3_projects/databases_no-backup/kraken2/animal_gut_microbiome_200908_db/kraken2/
+  vertebrate_all_nt: /ebio/abt3_projects/databases_no-backup/kraken2/vertebrata-all_nt_db/
+  plant: /ebio/abt3_projects/databases_no-backup/kraken2/plant_db/
+  fungi:  /ebio/abt3_projects/databases_no-backup/kraken2/fungi_db/
+  protozoa: /ebio/abt3_projects/databases_no-backup/kraken2/protozoa_db/
+  human: /ebio/abt3_projects/databases_no-backup/kraken2/human_db/
+  univec: /ebio/abt3_projects/databases_no-backup/kraken2/UniVec_Core_db/
+
+#-- Snakemake pipeline --#
+pipeline:
+  snakemake_folder: ./
+  script_folder: ./bin/scripts/
+  run_skip_locally: True        # trivial "skip" steps run locally (not qsub)
+  name: LLMGQC
+')
+
+```
+
+
+## Change parameters
+```{r}
+# Change parameters
+config_modified = glue(config_text, 
+     samples_file = DrP_Samplefile, 
+     output_dir = output_dir, 
+     skip_all_QC = "False")
+
+# Print config file
+writeLines(config_modified)
+```
+
+```{r}
+# Save file
+mod_config_file = file.path(llmgqc_dir, "config_DrP.yaml")
+write_lines(x = config_modified, file = mod_config_file)
+```
+
+## Snakemake command 
+
+```{r}
+qsub_template = glue("cd {{llmgqc}} ; conda activate snakemake; screen -L -S {{job_name}} ./snakemake_sge.sh {{config_file}} {{n_jobs}} --keep-going --rerun-incomplete --dryrun --quiet")
+
+glue(qsub_template, llmgqc = llmgqc_dir, job_name = "DrP_llmgqc", config_file = mod_config_file, n_jobs = "30")
+```
+
+# Combine reads after QC pipeline
+
+```{r}
+# post_QC_samples
+post_QC_samples = "/ebio/abt3_scratch/jdelacuesta/DrP_Combined/final/samples.txt" %>% 
+  read_tsv()
+
+DrP_merge_df = post_QC_samples %>% 
+  mutate(Sample = "DrP_combined") %>% 
+  select(-Notes)
+
+# Merged DrP samplesfile
+# Write samples file
+DrP_merge_samplefile = file.path(samples_files_dir, "Merge_DrP.txt")
+write_tsv(DrP_merge_df, DrP_merge_samplefile)
+```
+
+## Change parameters
+```{r}
+# Change parameters
+config_modified = glue(config_text, 
+     samples_file = DrP_merge_samplefile, 
+     output_dir = final_DrP, 
+     skip_all_QC = "True")
+
+# Print config file
+writeLines(config_modified)
+```
+
+```{r}
+# Save file
+mod_config_file = file.path(llmgqc_dir, "combine_DrP.yaml")
+write_lines(x = config_modified, file = mod_config_file)
+```
+
+## Snakemake command 
+
+```{r}
+qsub_template = glue("cd {{llmgqc}} ; conda activate snakemake; screen -L -S {{job_name}} ./snakemake_sge.sh {{config_file}} {{n_jobs}} --keep-going --rerun-incomplete --dryrun --quiet")
+
+glue(qsub_template, llmgqc = llmgqc_dir, job_name = "DrP_llmgqc", config_file = mod_config_file, n_jobs = "30")
+```
+
+
+# Session Info
+```{r}
+sessionInfo()
+```
+
+
