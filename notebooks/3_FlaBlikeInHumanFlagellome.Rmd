@@ -1,40 +1,30 @@
-
 ---
-title: "FlaB-like flagellins in human gut metagenome"
-output: html_notebook
+title: "3_FlaB-like flagellins in human gut metagenome"
+author: "Andrea Borbon"
+output: github_document
 ---
 
-#### This notebook describes how the intersect between flagellins present in human gut metagenomes and FlaB-like candidates previously selected
+This notebook describes how we obtained the intersect between flagellins present in human gut metagenomes and FlaB-like candidates previously selected
 
 #### Load libraries
 ```{r}
 library(tidyverse)
-library(stringr)
-library(tidyr)
-library(dplyr)
-library(reshape2)
-library(gapminder)
-library(forcats)
-library(ggplot2)
-library(scales)
-library(viridis)
 library(tidytext)
+library(conflicted)
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = "/ebio/abt3_projects/small_projects/aborbon/TLR5/SilentFlagellins_code/")
 ```
 
 ```{r}
-knitr::opts_chunk$set(echo=TRUE)
-```
-
-```{r}
-#Set working directory
-setwd("/ebio/abt3_projects/small_projects/aborbon/TLR5/SilentFlagellins_code/")
+conflict_prefer("filter","dplyr")
 ```
 
 #### 1. Import files
 ##### 1.1 Import the list of accession IDs of flab-like flagellins with non-R/K in residue 467
 ```{r}
-#This list was produced in Geneious Pro after manually checking the flagellin alignments and selecting those accessions that did not have R/K in the position 467
-#n=197
+#This list was produced with Geneious Pro after manually checking the flagellin alignments and selecting those accessions that did not have R/K in the position 467
 tofilter=read.delim("data/4_ToFilterFlaBFliCfinalhits.txt",header=F)
 names(tofilter)="Accession"
 tofilter
@@ -43,7 +33,7 @@ tofilter
 
 ##### 1.2. Import Franzosa mapping results
 ```{r}
-flagellin_diamond_franzosa=read.delim("/data/mergedFlagFranzosa.txt",header=F,sep="")
+flagellin_diamond_franzosa=read.delim("data/mergedFlagFranzosa.txt",header=F,sep="")
 names(flagellin_diamond_franzosa)=c("Study","Sample","qseqid","sseqid","pident","length","mismatch","gapopen","qstart","qend","sstart","send","evalue","bitscore")
 
 ```
@@ -59,14 +49,14 @@ names(flagellin_diamond_lloyd)=c("Sample","qseqid","sseqid","pident","length","m
 ##### 1.4. Merge LloydPrice and Franzosa results
 ```{r}
 mg.mapping.results=rbind(flagellin_diamond_franzosa,flagellin_diamond_lloyd)%>%
-  rename(Accession=sseqid)%>%
+  rename(Accession=sseqid)
 
 mg.mapping.results=mg.mapping.results%>%
   group_by(Accession)%>%
   count()
 
 mg.mapping.results %>%
-  print()
+  head()
 ```
 
 #### 2. Intersect of FlaB-like in human metagenomes
@@ -76,7 +66,7 @@ intersect.flab.mgs=inner_join(tofilter,mg.mapping.results)
 nrow(intersect.flab.mgs)
   
 intersect.flab.mgs %>%
-  print()
+  head()
 ```
 
 #### 3. Export accessions of FlaB-like flagellins present in human metagenomes
@@ -86,23 +76,25 @@ write_lines(intersect.flab.mgs$Accession,"data/intersect.flab.metagones_accn.tsv
 ```
 
 #### 4. Remove FlgL sequences and de-replicate final sequences
-```{sh}
+```{r}
 #subset intersect.flab.lloyd from flagellinDB
-seqtk subseq /ebio/abt3_projects/small_projects/aborbon/TLR5/Dalong_Flagellin/flic_flab_search/Dalong_flagellinDB_100 /ebio/abt3_projects/small_projects/aborbon/TLR5/Dalong_Flagellin/flic_flab_search/diamond/1_flab_2_flic/intersect.flab.metagones_accn.tsv > intersect.flab.metagones_accn.fasta
-
-#Manually removed all proteins annotated as "FlgL"
-grep "FlgL" intersect.flab.metagones_accn.fasta | cat > toRemove.tsv
-seqtk subseq intersect.flab.metagones_accn.fasta toRemove.tsv > finalhits_ibd_tlr5epitope_flab_flic.fasta #Revisar aquí como uso seqtk para esto
-#This reduced the dataset to 129 sequences
+# seqtk subseq /ebio/abt3_projects/small_projects/aborbon/TLR5/Dalong_Flagellin/flic_flab_search/Dalong_flagellinDB_100 /ebio/abt3_projects/small_projects/aborbon/TLR5/Dalong_Flagellin/flic_flab_search/diamond/1_flab_2_flic/intersect.flab.metagones_accn.tsv > intersect.flab.metagones_accn.fasta
+# 
+# #Manually removed all proteins annotated as "FlgL"
+# grep "FlgL" intersect.flab.metagones_accn.fasta | cat > toRemove.tsv
+# seqtk subseq intersect.flab.metagones_accn.fasta toRemove.tsv > finalhits_ibd_tlr5epitope_flab_flic.fasta #Revisar aquí como uso seqtk para esto
+# #This reduced the dataset to 129 sequences
 ```
 
 #### 5. Dereplication of final sequences
 Dereplication using CD-HIT at 0.99 identity.
-Input=129 sequences
-Output=85 sequences
-```{sh}
+```{r}
 #Dereplication CD-HIT
-cd-hit -i finalhits_ibd_tlr5epitope_flab_flic.fasta -o derep0.99.flablike.humanmetagenomes.fasta -c 0.99 -T 10 -M 16000 -n 5 
+# cd-hit -i finalhits_ibd_tlr5epitope_flab_flic.fasta -o derep0.99.flablike.humanmetagenomes.fasta -c 0.99 -T 10 -M 16000 -n 5
 ```
 
+
+```{r}
+sessionInfo()
+```
 
