@@ -1,37 +1,31 @@
 ---
 title: "1_HealthyHumanFlagellome"
-output: html_notebook
+author: "Andrea Borbon"
+output: github_document
 ---
-####### 
 
 ## Load libraries
 ```{r}
 library(tidyverse)
-library(stringr)
-library(tidyr)
-library(dplyr)
-library(reshape2)
-library(gapminder)
-library(forcats)
 library(ggplot2)
 library(scales)
-library(viridis)
-library(tidytext)
-library(gggrid)
-library(gridExtra)
-library(ggsci)
 library(tidytext)
 library(taxonomizr)
+library(conflicted)
+library(ggsci)
+```
+## Set working directory
+```{r setup}
+knitr::opts_knit$set(root.dir = "/ebio/abt3_projects/small_projects/aborbon/TLR5/SilentFlagellins_code/")
 ```
 
+#### Declare conflict preferences
+```{r}
+conflict_prefer("filter","dplyr")
+```
 
 ## Metagenomes mapped to flagellins for  candidates selection 
-This notebook describes the characterization of top abundant flagellins present in metagenomic samples in the dataset of Lloyd-Price et al., 2019. This dataset comprised 270 samples of healthy adults. (indent 1 tab)
-
-## set working directory
-```{r}
-setwd("/ebio/abt3_projects/small_projects/aborbon/TLR5/SilentFlagellins_code/")
-```
+This notebook describes the characterization of top abundant flagellins present in metagenomic samples in the dataset of Lloyd-Price et al., 2019. This dataset comprised 270 samples from healthy adults. (indent 1 tab)
 
 ## 1. Import metadata and mapping stats
 
@@ -55,26 +49,13 @@ flagellin_diamond_lloyd=tbl_df(read.delim("data/mergedFlagellinLloyd.txt",header
 names(flagellin_diamond_lloyd)=c("Sample","qseqid","sseqid","pident","length","mismatch","gapopen","qstart","qend","sstart","send","evalue","bitscore","Study")
 
 head(flagellin_diamond_lloyd)
-nrow(flagellin_diamond_lloyd) #n=2426629
 
 ```
+
+
 ## 2. Join metadata, mapped reads and sequencing QC statistics
-This step subsets only samples from healthy subjects
 
-```{r}
-#Merge all mapping results and metadata. Keep only samples from healthy subjects (Diagnosis==Control)
-#n=270 samples from healthy subjects
-#Note: MappedReads column refers to the total reads from one sample that mapped to flagellins in the database. It is does not account for all the reads that mapped to one accession
-
-flagellin_lloyd_metadata=inner_join(lloyd_qc,metadataLloyd,by="Sample")%>%
-  inner_join(mappedReadsStats,by="Sample")%>%
-  full_join(flagellin_diamond_lloyd)%>%
-  filter(Condition=="Control")#To subset only healthy subjects
-
-#Final:616439
-```
-
-###### Accessions for all samples (controls + IBD)
+###### Read counts table for all samples (controls + IBD)
 ```{r}
 flagellin_lloyd_total=inner_join(lloyd_qc,metadataLloyd,by="Sample")%>%
   inner_join(mappedReadsStats,by="Sample")%>%
@@ -84,21 +65,31 @@ flagellin_lloyd_total=inner_join(lloyd_qc,metadataLloyd,by="Sample")%>%
   rename(Accession=sseqid)
 ```
 
-## 3. Transform mapping hits results to read counts per accession
+###### Subset samples from healthy subjects
 ```{r}
-#n= 2579
-lloyd.healthy<-flagellin_lloyd_metadata%>%
+#Merge all mapping results and metadata. Keep only samples from healthy subjects (Diagnosis==Control)
+
+flagellin_lloyd_metadata_control=inner_join(lloyd_qc,metadataLloyd,by="Sample")%>%
+  inner_join(mappedReadsStats,by="Sample")%>%
+  full_join(flagellin_diamond_lloyd)%>%
+  filter(Condition=="Control")
+```
+
+## 3. Transform mapping hits results into read counts per accession
+Only for the subset of samples from healthy subjects
+```{r}
+lloyd.healthy<-flagellin_lloyd_metadata_control%>%
   group_by(sseqid)%>%
   summarise(mappedReads=n())%>%
   rename(Accession=sseqid)
 
-lloyd.healthy
+head(lloyd.healthy)
 ```
 
 
 ## 4. Descriptive stats on mapping results
 
-Descriptive stats on the read counts for the results on the whole dataset
+Descriptive stats on the read counts.
 ```{r}
 #Read counts table - subset healthy
 read.count= lloyd.healthy
@@ -111,94 +102,92 @@ stats.mapping=data.frame(dataset="LloydPrice",
 stats.mapping %>% print()
 
 ```
-#Testing filters
+### Summary statistics on read count filters
+#### Option 1: Filtering using the median of mapped reads
 ```{r}
-#Option1: Filtering with the median of mapped reads
 summary_sseqid_healthy.median<-lloyd.healthy%>%
    filter(mappedReads>median(mappedReads))
 
   #Summary statistics
-  nrow(summary_sseqid_healthy.median) #n=1157 
-  min(summary_sseqid_healthy.median$mappedReads) #n=9 
-  max(summary_sseqid_healthy.median$mappedReads) #n=9654 
+  nrow(summary_sseqid_healthy.median) 
+  min(summary_sseqid_healthy.median$mappedReads) 
+  max(summary_sseqid_healthy.median$mappedReads) 
 
-#Option2: Filtering with the mean of mapped reads
+#Plot mapped reads distribution using the median of mapped reads as cut-off
+ggplot(data=summary_sseqid_healthy.median,aes(x=mappedReads))+
+  geom_histogram(bins=50)+
+  geom_vline(aes(xintercept = median(mappedReads)),col='red',size=1)
+
+```
+
+#### Option 2: Filtering using the mean of mapped reads
+```{r}
 summary_sseqid_healthy.mean<-lloyd.healthy%>%
    filter(mappedReads>mean(mappedReads))
 
   #Summary statistics
-  nrow(summary_sseqid_healthy.mean) #n=456
-  min(summary_sseqid_healthy.mean$mappedReads) #n=150
-  max(summary_sseqid_healthy.mean$mappedReads) #n=9654
-
-#Plots of mapped reads distribution using the mean and median as cut-off
+  nrow(summary_sseqid_healthy.mean) 
+  min(summary_sseqid_healthy.mean$mappedReads) 
+  max(summary_sseqid_healthy.mean$mappedReads)
   
-#Using cut-off = median of mapped reads
-ggplot(data=summary_sseqid_healthy.median,aes(x=mappedReads))+
-  geom_histogram()+
-  geom_vline(aes(xintercept = median(mappedReads)),col='red',size=1)
-
-#Using cut-off = mean of mapped reads
+#Plot mapped reads distribution using the mean of mapped reads as cut-off
 ggplot(data=summary_sseqid_healthy.mean,aes(x=mappedReads))+
-  geom_histogram()+
+  geom_histogram(bins=50)+
   geom_vline(aes(xintercept = median(mappedReads)),col='red',size=1)
-
 ```
-
 
 
 ## 5. Filtering flagellins
 
-#Filtering flagellins
+#### Filtering flagellins
 Flagellins with a read count below the median of mapped reads/flagellin will be discarded.
 
 ```{r}
 #Summarize flagellins and filter using the mean of mappedReads
-#output:1263
-subsetHealthy<-flagellin_lloyd_metadata%>%
+
+subsetHealthy<-flagellin_lloyd_metadata_control%>%
   group_by(sseqid)%>%
   summarise(mappedReads=n())%>%
   rename(Accession=sseqid)%>%
-  filter(mappedReads>median(mappedReads))#mean=239
+  filter(mappedReads>median(mappedReads))
 
-nrow(subsetHealthy) # n=1263 using the median of read counts
+head(subsetHealthy)
 ```
 
-#------------------------------------------------
-#3. Taxonomic annotation of mapped flagellins
-#------------------------------------------------
 
-#3.1. Import GTDB metadata and taxonomy files
+## 6. Taxonomic annotation of mapped flagellins
+
+#### 6.1. Import GTDB metadata and taxonomy files
 ```{r}
 #Import metadata of GTDB version 202
 gtdb_bac_metadata_v202=read.delim("data/bac120_metadata_r202.tsv")
 
 #Import taxonomy of GTDB version 202
-gtdb_bac.tax_v202=read.delim("bac120_taxonomy_r202.tsv",header=F)%>%
+gtdb_bac.tax_v202=read.delim("data/bac120_taxonomy_r202.tsv",header=F)%>%
   rename(accession=V1)%>%
   separate(V2,into=c("Domain","Phylum","Class","Order","Family","Genus","Species"),sep=";")
 
 #Merge taxonomy and metadata files
-taxid.to.gtdb_taxonomy.v202=inner_join(gtdb_bac.tax_v202,gtdb_bac_metadata_v202)#%>%
+taxid.to.gtdb_taxonomy.v202=inner_join(gtdb_bac.tax_v202,gtdb_bac_metadata_v202)%>%
   select(Domain,Phylum,Class,Order,Family,Genus,Species,ncbi_taxid,accession)
 
 ```
 
-#3.2. Import esearch-annotated accessions
+#### 6.2. Import esearch-annotated accessions
 ```{r}
 #This was produced by using esearch to find the assembly associated to each protein accession in the IPG database, and subsequently searching said assembly ID into the Assembly database.
 metadata_esearch=read_table("data/finalMetadataEsearchOnlyids.txt")%>%
   rename(ncbi_genbank_assembly_accession="Assembly")
 
-metadata_esearch
+head(metadata_esearch)
 ```
-#Prepares NCBI database to obtain taxids from accessions
+#### 6.4. Prepares NCBI database to obtain taxids from accessions
 ```{r}
 #This step will take long to process
 #prepareDatabase(sqlFile='accessionTaxa.sql',tmpDir=".",getAccessions=T)
 ```
 
-#Find taxids of flagellin accessions with taxonomizr
+#### 6.5. Find taxids of flagellin accessions with taxonomizr
 ```{r}
 #Get taxids of flagellins in subset of healthy subjects above abundance cutoff
 taxids.subsethealthy=subsetHealthy %>%
@@ -207,11 +196,9 @@ taxids.subsethealthy=subsetHealthy %>%
 
 ```
 
-#Assign taxonomy to flagellins found in healthy subjects
-Input: flagellins mapped & GTDB taxonomy table
-Output: flagellins mapped with assigned GTDB taxonomy.
+#### 6.6. Assign taxonomy to flagellins found in samples from healthy subjects
 ```{r}
-#Filtered list (by read counts) n=1263 (only 1114 have assigned GTDB taxonomy)
+#Filtered list (by read counts) 
 taxonomy.lloyd.healthy=left_join(taxids.subsethealthy,taxid.to.gtdb_taxonomy.v202,by="ncbi_taxid")%>%
   distinct(Accession,.keep_all=T)%>%
   select(contains(c("Accession","Domain","Phylum","Class","Order","Family","Genus","Species","mappedReads")))%>%
@@ -222,6 +209,7 @@ no.taxonomy.lloyd.healthy=anti_join(taxids.subsethealthy,taxid.to.gtdb_taxonomy.
   inner_join(metadata_esearch,by="Accession")%>%
   inner_join(taxid.to.gtdb_taxonomy.v202%>%mutate(ncbi_genbank_assembly_accession=str_remove_all(accession,"RS_")),by="ncbi_genbank_assembly_accession")%>%
   select(contains(c("Accession","Domain","Phylum","Class","Order","Family","Genus","Species","mappedReads")))%>%
+  select(-ncbi_genbank_assembly_accession)%>%
   rename(gtdb_assembly="accession")
 
 taxonomy.lloyd.healthy = rbind(taxonomy.lloyd.healthy,no.taxonomy.lloyd.healthy)
@@ -230,11 +218,10 @@ taxonomy.lloyd.healthy = rbind(taxonomy.lloyd.healthy,no.taxonomy.lloyd.healthy)
 write_tsv(taxonomy.lloyd.healthy,"results/taxonomy.top.metagenomes.1114.tsv")
 ```
 
-#------------------------------------------------
-# 4. Plots
-#------------------------------------------------
 
-#Plot of the ranked flagellins found in healthy subjects
+# 7. Plots
+
+#### Plot of the ranked flagellins found in healthy subjects
 ```{r}
 #This ranks the flagellins by read counts and plots the top 50 of the ranking.
 pdf(file="graphics/topabundant_flagellins.pdf",height=4,width=6)
@@ -256,7 +243,7 @@ unite(species_accn,c(Species,Accession))%>%
 taxonomy.plot.healthy
 ```
 
-#Summarize genus of flagellins found in metagenomes of healthy subjects
+#### Summarize genus of flagellins found in metagenomes of healthy subjects
 ```{r}
 #Plot the mapped reads for each genus in the healthy subset.Here I'm using the top 100 in the ranking.
 pdf(file="graphics/genus_count_topabundant.pdf",height=4,width=6)
@@ -267,20 +254,19 @@ plot.genus.final.healthy=ggplot(data=top_n(taxonomy.lloyd.healthy,100,mappedRead
 dev.off()
 plot.genus.final.healthy
 ```
-###------
-#Final 46 candidates
-###------
+
+
+# 8. Final 44 candidates
 
 ```{r}
 #Import list of accessions of final random candidates among top abundant flagellins
 accn.nonepitope=read_tsv("data/accn.nonepitope.tsv")%>%
-  select(Accession,ncbi_genbank_assembly_accession.x,cds_region)%>%
-  renam
+  select(Accession,ncbi_genbank_assembly_accession.x,cds_region)
 
-temp2=right_join(taxonomy.lloyd.healthy,accn.nonepitope,by="Accession")%>%
-  select(1:15)%>%
-  rename(Genus="Genus.x")%>%
-  rename(Species="Species.x")
+temp2=right_join(taxonomy.lloyd.healthy,accn.nonepitope,by="Accession")#%>%
+  #select(1:15)%>%
+  #rename(Genus="Genus.x")%>%
+  #rename(Species="Species.x")
 
 #Export final taxonomy table of final candidates
 write_tsv(temp2,"results/taxonomy.final.abundantcandidates.tsv")
@@ -296,3 +282,8 @@ dev.off()
 plot.temp2
 
 ```
+
+```{r}
+sessionInfo()
+```
+
