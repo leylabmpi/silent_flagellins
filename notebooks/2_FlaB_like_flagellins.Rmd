@@ -1,45 +1,42 @@
 ---
-title: "FliC_FlaB search"
-output: html_document
-date: "06/08/2020"
+title: "2_RhFlaB-like search"
 author: "Andrea Borbon"
+output: github_document
 ---
 
 ```{r}
-library(dplyr)
-library(ggsci)
-library(reshape2)
+library(tidyverse)
 library(ggplot2)
-library(viridis)
 library(gplots)
-
+library(conflicted)
 ```
 
-**Set working directory**
-```{r}
-setwd("/ebio/abt3_projects/small_projects/aborbon/TLR5/SilentFlagellins_code/")
+## Set working directory
+```{r setup}
+knitr::opts_knit$set(root.dir = "/ebio/abt3_projects/small_projects/aborbon/TLR5/SilentFlagellins_code/")
 ```
 
-
-#### 1. First blastp of truncated flaB against the full-length flagellin 
-
-Results of DIAMOND blast truncated C-terminus of FlaB as a query against the full-length flagellin database. 
-
-#### DIAMOND results
-##### 1. Blast of truncated CD from FlaB against flagellin database
+##### Declare conflict preferences
 ```{r}
-blastp_flab_to_fullLength=read.delim("1_flab_2_flic/blastp_truncated_FlaB_to_fullLength_flag",header=F)
+conflict_prefer("filter","dplyr")
+```
+
+## 1. Blast results of RhFlaB-like
+
+##### 1. DIAMOND Blastp of truncated C-terminus of RhFlaB as query against the database of full-length flagellins
+```{r}
+blastp_flab_to_fullLength=read.delim("data/blastp_truncated_FlaB_to_fullLength_flag",header=F)
 names(blastp_flab_to_fullLength)=c("qseqid","sseqid","pident","length","mismatch","gapopen","qstart","qend","sstart","send","evalue","bitscore")
+head(blastp_flab_to_fullLength)
+```
 
-nrow(blastp_flab_to_fullLength) #n=10121
-
-View(blastp_flab_to_fullLength)
-
+##### Descriptive stats of blast results
+```{r}
 #Histogram of length
 ggplot(data=blastp_flab_to_fullLength,aes(x=length))+
   geom_histogram(bins=50)+
   theme_bw()+xlab("Length")+ylab("Frequency")+
-   geom_vline(aes(xintercept = median(length)),col='red',size=1)+ 
+  geom_vline(aes(xintercept = median(length)),col='red',size=1)+ 
   geom_vline(aes(xintercept = 117),col='blue',size=1) #Add the line indicating the length of the query (truncated CD of FlaB)
 
 #Histogram of mismatch
@@ -54,19 +51,18 @@ ggplot(data=blastp_flab_to_fullLength,aes(x=pident))+
   geom_histogram(bins=50)+
   theme_bw()+xlab("% Identity")+ylab("Frequency")+
    geom_vline(aes(xintercept = median(pident)),col='red',size=1) 
-
 ```
 
 
 ##### 2. Filtering results of first blast
-Filtered results of blast using the median of percentage of identity (pident), length and mismatches. 
-Below I plot the new distribution of those parameters in the set of filtered data.
-This filter resulted in 979 flagellins.
+Filtered results of blastp using the median of percentage of identity (pident), length and mismatches. 
+Plot the new distribution of those parameters in the set of filtered data.
 ```{r}
-blastp_flab_to_fullLength_filt=blastp_flab_to_fullLength%>%
+#Filter hits according to above criteria
+blastp_flab_to_fullLength_filt = blastp_flab_to_fullLength%>%
   filter(length>median(length))%>%
   filter(pident>median(pident))%>%
-  filter(mismatch<median(mismatch)) #n=979
+  filter(mismatch<median(mismatch)) 
 
 #Histogram of length
 ggplot(data=blastp_flab_to_fullLength_filt,aes(x=length))+
@@ -81,28 +77,23 @@ ggplot(data=blastp_flab_to_fullLength_filt,aes(x=mismatch))+
 
 #Histogram of pident
 ggplot(data=blastp_flab_to_fullLength_filt,aes(x=pident))+
-  geom_hline(bins=50)+
+  geom_histogram(bins=50)+
   theme_bw()+xlab("% Identity")+ylab("Frequency")
 
 write_tsv(blastp_flab_to_fullLength_filt,"results/blastp_flab_to_fullLength_filt.tsv")
 write_lines(blastp_flab_to_fullLength_filt$sseqid,"results/flab_tofulllength_hits_filt.tsv")
 ```
 
-#### 3. Results of DIAMOND Blastp of truncated FliC against the filtered FlaB hits
+##### 3. Results of DIAMOND Blastp of truncated FliC against the filtered FlaB hits
 ```{r}
 #Input data: Blast result of truncated ND of FliC against filtered hits from previous step: blastp_tflic_toflab
-
 blastp_tflic_toflab=read.delim("data/blastp_truncatedFlic_to_FlaBhits.txt",header=F)
 names(blastp_tflic_toflab)=c("qseqid","sseqid","pident","length","mismatch","gapopen","qstart","qend","sstart","send","evalue","bitscore")
-
-nrow(blastp_tflic_toflab) #n=971
 
 #remove duplicated hits
 derep.blastp_tflic_toflab=blastp_tflic_toflab%>%
   distinct(sseqid,.keep_all=T)
   
-nrow(derep.blastp_tflic_toflab) #n=917
-
 #Histogram of length
 ggplot(data=derep.blastp_tflic_toflab,aes(x=length))+
   geom_histogram(bins=30)+
@@ -123,20 +114,26 @@ ggplot(data=derep.blastp_tflic_toflab,aes(x=pident))+
 ```
 
 
-#### 7. Write final sequences after de-replicating duplicated sseqids from the blast result
+##### 4. Write final sequences after de-replicating duplicated sseqids from the blast result
 ```{r}
 write_lines(derep.blastp_tflic_toflab$sseqid,"results/final_hits_flab_flic.txt")
 nrow(derep.blastp_tflic_toflab)
 ```
 
-#### 8. Manual filter
+##### 5. Manual filter
+In Geneious, the 917 accessions were aligned, and sorted by the residue in the position 467. All sequences with an R (n=178) or K (n=544) residue in that position were discarded. The list was shortened to 195 sequences
+
+
+
+##### 6. Import accessions and summarize taxonomy
+
 ```{r}
-#In Geneious, the 917 accessions were aligned. After, I sorted them by the residue in the position 467. I removed all the sequences that had R (n=178) and K (n=544). The list was shortened to 195 sequences
+#Import GTDB taxonomy table
+taxonomy.gtdb.full.db=read_tsv("data/taxonomy.gtdb.full.db.txt",col_names=T)%>%
+  separate(gtdb_taxonomy,into=c("Domain","Phylum","Class","Order","Family","Genus","Species"),sep=";")
 ```
 
-#### 9. Import accessions and summarize taxonomy
 ```{r}
-#n=195
 #Import the accession numbers of the sequences kept after the manual filter
 finalhits_no.rk=as_tibble(read.delim("data/3_finalhits_ids_no467RK.txt",header=F))%>%
   rename(Accession=V1)
@@ -164,12 +161,9 @@ ggplot(data=(group_by(taxonomy.nork.finalhits,ncbi_phylum)%>%
 
 #Dereplicate at 99% identity the final list, to reduce redundancy of flagellins from the same species. 
 I ran cd-hit at 99% identity on the final list of flagellins to remove those ones that are almost identical.
-In parallel, I "esearched" the accessions in the IPG to obtain the CDSs. So, I'll intersect the resulting table with the headers of the dereplicated fasta. After, I can map the assembly identifiers in the CDS file.
+In parallel, I "esearched" the accessions in the IPG to obtain their CDSs. So, I'll intersect the resulting table with the headers of the dereplicated fasta. After, I can map the assembly identifiers in the CDS file. From 131 RhFlaB-like and abundant flagellins, 125 were succesfully associated with a CDS.
 
 ```{r}
-#CD-HIT concatenated FlaB-like and top abundant flagellins
-#n=131
-#Final = 125
-
+sessionInfo()
 ```
 
